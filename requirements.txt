@@ -1,3 +1,4 @@
+jsonschema
 matplotlib
 pandas
 pyyaml

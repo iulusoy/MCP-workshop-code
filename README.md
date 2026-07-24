@@ -28,6 +28,15 @@ python scripts/process_climate.py --config config/example.yaml
 - `outputs/climate_summary.csv`
 - `outputs/climate_plot.png`
 
+## Tests
+
+```bash
+pip install -r requirements-dev.txt
+pytest
+```
+
+Covers the processing functions, end-to-end pipeline run, and the config schema (`config/schema.json`) in isolation.
+
 ## Notes for MCP use
 
 The script is designed to be non-interactive and deterministic, so an MCP server can invoke it directly with the config path and inspect the generated files afterward.

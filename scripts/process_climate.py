@@ -1,17 +1,37 @@
 from __future__ import annotations
 
 import argparse
+import json
 from pathlib import Path
 from typing import Any
+
+import matplotlib
+
+matplotlib.use("Agg")
 
 import matplotlib.pyplot as plt
 import pandas as pd
 import yaml
+from jsonschema import ValidationError, validate
+
+SCHEMA_PATH = Path(__file__).resolve().parent.parent / "config" / "schema.json"
+
+
+def load_schema(schema_path: Path = SCHEMA_PATH) -> dict[str, Any]:
+    with schema_path.open("r", encoding="utf-8") as handle:
+        return json.load(handle)
 
 
 def load_config(config_path: Path) -> dict[str, Any]:
     with config_path.open("r", encoding="utf-8") as handle:
-        return yaml.safe_load(handle)
+        config = yaml.safe_load(handle)
+
+    try:
+        validate(instance=config, schema=load_schema())
+    except ValidationError as exc:
+        raise ValueError(f"Invalid config at {config_path}: {exc.message}") from exc
+
+    return config
 
 
 def resolve_path(base_dir: Path, raw_path: str) -> Path:
@@ -76,12 +96,7 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def main() -> int:
-    args = parse_args()
-    config_path = Path(args.config).resolve()
-    config = load_config(config_path)
-    project_root = config_path.parent.parent
-
+def run_pipeline(config: dict[str, Any], project_root: Path) -> dict[str, Any]:
     input_csv = resolve_path(project_root, config["input_csv"])
     date_column = config["date_column"]
     temp_column = config["metrics"]["temperature_c"]
@@ -110,9 +125,31 @@ def main() -> int:
         float(plot_config.get("height", 7)),
     )
 
-    print(f"Read data from: {input_csv}")
-    print(f"Wrote summary to: {summary_output}")
-    print(f"Wrote plot to: {plot_output}")
+    return {
+        "input_csv": str(input_csv),
+        "summary_path": str(summary_output),
+        "plot_path": str(plot_output),
+        "rows_processed": len(processed),
+    }
+
+
+def run_from_config_path(config_path: Path) -> dict[str, Any]:
+    """Assumes config_path lives at <project_root>/config/*.yaml, so that
+    relative paths in the config (input_csv, output_path, ...) resolve
+    against <project_root>."""
+    config_path = config_path.resolve()
+    config = load_config(config_path)
+    project_root = config_path.parent.parent
+    return run_pipeline(config, project_root)
+
+
+def main() -> int:
+    args = parse_args()
+    result = run_from_config_path(Path(args.config))
+
+    print(f"Read data from: {result['input_csv']}")
+    print(f"Wrote summary to: {result['summary_path']}")
+    print(f"Wrote plot to: {result['plot_path']}")
     return 0
 
 
