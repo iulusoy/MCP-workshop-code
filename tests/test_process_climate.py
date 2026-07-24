@@ -9,8 +9,8 @@ import process_climate as pc
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
 
-def test_resolve_path_absolute():
-    absolute = Path("/tmp/some/file.csv")
+def test_resolve_path_absolute(tmp_path):
+    absolute = tmp_path / "some" / "file.csv"
     assert pc.resolve_path(Path("/whatever"), str(absolute)) == absolute
 
 
