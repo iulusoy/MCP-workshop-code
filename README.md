@@ -24,8 +24,10 @@ Here, an MCP builds the foundation: It defines the API, executes the software, a
 - `config/example.yaml`: input parameters for the processing run
 - `data/mock_climate.csv`: mock climate time-series data
 - `scripts/process_climate.py`: processing and plotting script
+- `mcp_server/`: MCP server wrapping the script (see [MCP server](#mcp-server) below)
+- `docs/mcp_implementation_plan.md`: implementation plan for the MCP server and its current status
 - `outputs/`: generated summary CSV and plot files
-- `tests/`: unit tests for the processing and plotting script
+- `tests/`: unit tests for the processing/plotting script and the MCP server
 
 ## Data processing order in the script
 
@@ -63,6 +65,34 @@ pip install -r requirements-dev.txt
 python -m pytest
 ```
 
-## Notes for MCP use
+## MCP server
 
-The script is designed to be non-interactive and deterministic, so an MCP server can invoke it directly with the config path and inspect the generated files afterward.
+`mcp_server/` wraps the pipeline as an MCP server (`mcp_server/server.py`), so an agent can call it as a tool instead of shelling out to the CLI. It calls `process_climate.run_pipeline()` directly (no subprocess) and reuses `config/schema.json` for validation.
+
+Tools:
+- `get_config_schema` — the JSON Schema a config must satisfy (also exposed as the resource `climate://config-schema`)
+- `list_sample_data` — CSV files available under `data/`, with their column names
+- `validate_climate_config` — validate a config without running the pipeline
+- `process_climate_data` — run the pipeline on an inline config; returns a text report (row count, monthly summary table) plus the rendered plot image
+
+Design choices, and the hurdles from the workflow above that they remove:
+- **The config is passed inline as JSON**, not as a path to a YAML file the caller has to write and place correctly (hurdles 2-4). Call `get_config_schema` to see the shape, `list_sample_data` to see valid `input_csv` values, and `validate_climate_config` to check a draft before running it.
+- **Every path in a config is treated as untrusted input** and resolved by the server (`mcp_server/paths.py`), not trusted verbatim: `input_csv` must resolve inside `data/`, and the `output_path` fields under `plot`/`summary` are reduced to their filename only — the directory portion is discarded. Each call to `process_climate_data` writes to its own fresh directory under `outputs/`, so concurrent or repeated runs never collide or overwrite each other's results, and a config cannot point anywhere else on disk.
+
+### Running the server
+
+```bash
+pip install -r requirements.txt   # now includes mcp[cli]
+python -m mcp_server.server       # stdio transport
+```
+
+or, after `pip install -e .`, via the console script `climate-mcp-server`.
+
+To register it with Claude Code:
+```bash
+claude mcp add climate-example -- python -m mcp_server.server
+```
+
+### Testing
+
+`tests/test_mcp_server.py` calls the tool functions directly (they stay plain, callable Python functions under the `@mcp.tool()` decorator) and covers the sandboxing rules above, including path-traversal attempts in `input_csv` and `output_path`. Run it with the rest of the suite via `python -m pytest`.
