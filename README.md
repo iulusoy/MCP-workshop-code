@@ -24,10 +24,11 @@ Here, an MCP builds the foundation: It defines the API, executes the software, a
 - `config/example.yaml`: input parameters for the processing run
 - `data/mock_climate.csv`: mock climate time-series data
 - `scripts/process_climate.py`: processing and plotting script
-- `mcp_server/`: MCP server wrapping the script (see [MCP server](#mcp-server) below)
-- `docs/mcp_implementation_plan.md`: implementation plan for the MCP server and its current status
 - `outputs/`: generated summary CSV and plot files
 - `tests/`: unit tests for the processing/plotting script and the MCP server
+
+### Relevant content for stage 1 of the MCP
+- `mcp_server/`: MCP server wrapping the script (see [MCP server](#mcp-server) below).
 
 ## Data processing order in the script
 
@@ -67,30 +68,100 @@ python -m pytest
 
 ## MCP server
 
-`mcp_server/` wraps the pipeline as an MCP server (`mcp_server/server.py`), so an agent can call it as a tool instead of shelling out to the CLI. It calls `process_climate.run_pipeline()` directly (no subprocess) and reuses `config/schema.json` for validation.
+`mcp_server/` wraps the pipeline as an MCP server (`mcp_server/server.py`), so an agent can call it as a tool. 
 
-Tools:
+The MCP server then calls `process_climate.run_pipeline()` directly (no subprocess) and reuses `config/schema.json` for validation.
+
+This provides the following tools to the agent:
 - `get_config_schema` — the JSON Schema a config must satisfy (also exposed as the resource `climate://config-schema`)
 - `list_sample_data` — CSV files available under `data/`, with their column names
 - `validate_climate_config` — validate a config without running the pipeline
 - `process_climate_data` — run the pipeline on an inline config; returns a text report (row count, monthly summary table) plus the rendered plot image
 
-Design choices, and the hurdles from the workflow above that they remove:
-- **The config is passed inline as JSON**, not as a path to a YAML file the caller has to write and place correctly (hurdles 2-4). Call `get_config_schema` to see the shape, `list_sample_data` to see valid `input_csv` values, and `validate_climate_config` to check a draft before running it.
-- **Every path in a config is treated as untrusted input** and resolved by the server (`mcp_server/paths.py`), not trusted verbatim: `input_csv` must resolve inside `data/`, and the `output_path` fields under `plot`/`summary` are reduced to their filename only — the directory portion is discarded. Each call to `process_climate_data` writes to its own fresh directory under `outputs/`, so concurrent or repeated runs never collide or overwrite each other's results, and a config cannot point anywhere else on disk.
+### New user workflow
+
+Using the tools provided through the MCP, the script no longer uses the path to a config file. Instead, the `config` choices are passed inline as json and validated against the stored schema.
+
+This makes sure that user input errors are correct before running the pipeline, as well as it restricts the file system access by the MCP server. 
+
+For security reasons, each path in the input is by default untrusted, and must resolve under certain directories in the file system: `input_csv` must resolve inside `data/`, and the outputs do not contain any paths anymore but only filenames, that resolve to a fresh directory in `outputs/`. This ensures that concurrent or repeated runs never collide or overwrite each other's results, and that a config cannot point anywhere else on the disk.
+
+The workflow thus is now as follows:
+
 
 ### Running the server
 
+To allow connections to the server, you need to start it locally. Either you can run it through the console, after having installed all the requirements into your environment, using
 ```bash
 pip install -r requirements.txt   # now includes mcp[cli]
 python -m mcp_server.server       # stdio transport
 ```
+or, after `pip install -e .`, you may run it via the console script `climate-mcp-server`.
 
-or, after `pip install -e .`, via the console script `climate-mcp-server`.
+After that, to start using the MCP with your agent, you need to register it with the agent.
 
-To register it with Claude Code:
+#### Claude Code
+
+To register the MCP with Claude Code, use:
 ```bash
 claude mcp add climate-example -- python -m mcp_server.server
+```
+in your Claude chat. This will create/add to the  `.claude.json` file in your home directory.
+
+#### VSCode and GitHub Copilot
+
+To register the MCP with VSCode and GitHub Copilot, you need to place a `mcp.json` file with the following content in the `.vscode` directory:
+```
+{
+  "servers": {
+    "climate-mcp-local": {
+      "type": "stdio",
+      "command": "<path-to-your-environment>/climate-mcp-server",
+      "args": []
+    }
+  }
+}
+```
+Here, you can then also start and stop the MCP server using the little "play" button as shown in the json file.
+
+#### Pi coding agent
+
+To register the MCP with the Pi coding agent, add it to `mcp.json` (global: `~/.pi/agent/mcp.json`, or project-local `.pi/mcp.json`):
+```json
+{
+  "mcpServers": {
+    "climate-example": {
+      "command": "<path-to-your-environment>/climate-mcp-server",
+      "args": []
+    }
+  }
+}
+```
+Pi's tools are then exposed with the prefix `mcp_climate-example_<tool-name>`.
+
+#### Vibe Mistral coding agent
+
+Vibe uses a TOML config file (`config.toml`). Add a `[[mcp_servers]]` table:
+```toml
+[[mcp_servers]]
+name = "climate-example"
+transport = "stdio"
+command = "<path-to-your-environment>/climate-mcp-server"
+args = []
+```
+Vibe exposes the tools under the pattern `climate-example_<tool-name>`.
+
+#### Codex
+
+To register the MCP with the Codex CLI, use:
+```bash
+codex mcp add climate-example -- python -m mcp_server.server
+```
+This writes to `~/.codex/config.toml` (or `.codex/config.toml` for a project-scoped, trusted-only registration); equivalently, you can add the entry there directly:
+```toml
+[mcp_servers.climate-example]
+command = "<path-to-your-environment>/climate-mcp-server"
+args = []
 ```
 
 ### Testing

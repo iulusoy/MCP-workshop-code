@@ -47,7 +47,7 @@ def output_filename(raw_path: str, *, label: str) -> str:
     is discarded so the file always lands inside the run's own directory.
     """
     filename = Path(raw_path).name
-    if not filename:
+    if not filename or filename in (".", ".."):
         raise PathSecurityError(f"{label} '{raw_path}' does not name a file")
     return filename
 
