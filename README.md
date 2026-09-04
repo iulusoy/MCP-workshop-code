@@ -191,3 +191,35 @@ args = []
 ### Testing
 
 `tests/test_mcp_server.py` calls the tool functions directly (they stay plain, callable Python functions under the `@mcp.tool()` decorator) and covers the sandboxing rules above, including path-traversal attempts in `input_csv` and `output_path`. Run it with the rest of the suite via `python -m pytest`.
+
+## Security
+
+Once a config can come from an agent rather than a human hand-writing YAML, every path and value in it is untrusted input. The server treats it that way:
+
+- **Path sandboxing** (`mcp_server/paths.py`): `input_csv` is resolved and checked with `relative_to(DATA_ROOT)`, so any absolute path or `../` sequence that would escape `data/` is rejected before the file is opened. Output paths (`plot.output_path`, `summary.output_path`) are reduced to their bare filename (`Path(raw_path).name`) — any directory component the config supplied, including `..`, is simply discarded, not just checked, so there is no path left to escape with.
+- **Per-run isolation** (`paths.new_run_dir()`): every call to `process_climate_data` writes into a fresh, UUID-named directory under `outputs/`, never into a caller-chosen location. Concurrent or repeated runs can't collide or overwrite each other's results, and a config cannot direct output anywhere else on the host.
+- **Schema validation before execution** (`_schema_errors()` in `mcp_server/server.py`, reusing `config/schema.json`): the config is validated against the JSON Schema and rejected with the specific violations before the pipeline ever runs, rather than failing partway through or on bad assumptions.
+- **No subprocess / no shell**: the MCP server calls `process_climate.run_pipeline()` in-process as a plain Python function, not via `subprocess`/shell string-building. There's no command-line assembly for a malicious value to break out of.
+- **Config is inline JSON, not a file path**: the agent passes the config as structured data in the tool call, never a path to a config file on disk. This also means the agent — and by extension the LLM — never needs or gets to know the server's filesystem layout beyond what `list_sample_data`/`get_config_schema` deliberately expose.
+
+What this setup does *not* provide: authentication/authorization on the tool calls themselves, rate limiting, or resource limits (CPU/memory/time) on a pipeline run. That's acceptable for a local, single-user, stdio-transport example where the trust boundary is "whoever can spawn the server process" (i.e. you, or your agent running as you) — see the deployment notes below for what changes if that boundary moves.
+
+`tests/test_mcp_server.py` exercises the sandboxing directly, including path-traversal attempts against both `input_csv` and `output_path`.
+
+## MCP server deployment
+
+In this repo the server only runs as a **local stdio subprocess**: `mcp.run()` in `mcp_server/server.py` uses the default `"stdio"` transport, and `main()` takes no arguments to change that. The underlying `mcp` library also ships SSE and streamable-HTTP transports (`run_sse_async`, `run_streamable_http_async`), but this example does not wire them up — there is no network listener, no port, and nothing to expose accidentally.
+
+Consequences of the stdio model:
+- The server process is spawned and owned by whichever client starts it (Claude Code, VSCode, Pi, Vibe, Codex — see the registration snippets above), lives only as long as that client keeps it running, and is reachable only by that one client over its own stdin/stdout pipe. There is no separate "deploy the server somewhere" step for local use — registering it with a client *is* deployment.
+- Because it's a subprocess of a trusted parent, not a network service, there is no built-in authentication layer — the trust boundary is entirely "who can launch this process," per the security notes above.
+- Filesystem access is still bounded by `mcp_server/paths.py` regardless of who launches it, so a misbehaving or compromised client can't use the server to reach outside `data/`/`outputs/`, but it *can* run the pipeline as fast/often as it likes — there's no throttling.
+
+If you wanted to run this server centrally instead (e.g. one server shared by multiple users or agents over a network), that would mean:
+- switching to the streamable-HTTP or SSE transport instead of stdio,
+- adding an authentication/authorization layer in front of it (the library's transports don't provide one out of the box),
+- putting it behind TLS (a reverse proxy is the usual choice) since MCP itself doesn't encrypt the transport,
+- adding resource/rate limits per caller, since `DATA_ROOT`/`OUTPUTS_ROOT` sandboxing only constrains *where* files land, not *how much* processing a caller can trigger,
+- and likely running each request's pipeline in some isolated worker (process/container) rather than in the long-lived server process, so one bad or huge input can't stall other callers.
+
+None of that is implemented here as it is out of scope for this basic example, but it represents the gap between "runs on my machine via stdio" and "runs as a shared service."
