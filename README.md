@@ -91,14 +91,14 @@ The workflow thus is now as follows:
 
 ### Running the server
 
-To allow connections to the server, you need to start it locally. Either you can run it through the console, after having installed all the requirements into your environment, using
+To test out the server, you can start it locally. Either you can run it through the console, after having installed all the requirements into your environment, using
 ```bash
 pip install -r requirements.txt   # now includes mcp[cli]
 python -m mcp_server.server       # stdio transport
 ```
 or, after `pip install -e .`, you may run it via the console script `climate-mcp-server`.
 
-After that, to start using the MCP with your agent, you need to register it with the agent.
+To start using the MCP with your agent, you need to register it with the agent. Most agents will start the server for you, so you do not need to run the above command.
 
 #### Claude Code
 
