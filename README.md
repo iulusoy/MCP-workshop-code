@@ -86,7 +86,31 @@ This makes sure that user input errors are correct before running the pipeline, 
 
 For security reasons, each path in the input is by default untrusted, and must resolve under certain directories in the file system: `input_csv` must resolve inside `data/`, and the outputs do not contain any paths anymore but only filenames, that resolve to a fresh directory in `outputs/`. This ensures that concurrent or repeated runs never collide or overwrite each other's results, and that a config cannot point anywhere else on the disk.
 
-The workflow thus is now as follows:
+The workflow and agent steps taken are as follows:
+
+1. The user states the intent and where the data is found:
+> User: "For the data in the data/ folder, prepare a summary and a plot for me using the climate mcp."
+
+2. The statement is read by the LLM, and the decision to use the climate_mcp tools was taken. The LLM then follows the server instructions given in `instructions`:
+    a. Call to `get_config_schema()` and `list_sample_data()`
+    b. The result is used to construct the config in the next step
+
+3. The LLM emits the tool call for `process_climate_data` through the harness to the MCP, using the MCP over JSON-RPC 2.0 protocol. The harness already did a handshake with the MCP at session init / upon MCP connection. Through the handshake, the harness initialized the server and obtained the tool list (`@mcp.tool()` decorators) and their docstrings for the LLM.
+In the tool call, the LLM emits the built config `json` based on the information obtained in 1. and 2., providing a structured output. The harness converts the call into the proper request:
+```
+{"jsonrpc":"2.0","id":N,"method":"tools/call",
+ "params":{"name":"process_climate_data","arguments":{"config":{...}}}}
+ ```
+ 4. The MCP server then reads it, routes to the correct Python function `process_climate_data()` and runs synchronously through the following steps:
+    - validate the schema: `_schema_errors()`
+    - builds the run config dictionary: `run_config`
+    - creates a new directory under `outputs` not to overwrite prior data: `paths.new_run_dir()`
+    - then starts the processing pipeline (same as before): `pc.run_pipeline()`
+    - the output is noted: `result` is a dict captured from the pipeline, containing run information  
+
+    The server then provides the tool call results back to the harness as JSON-RPC.
+
+5. The harness converts the result back to actual PNG bytes and text, and hands it to the LLM. The LLM reports the result to the user.
 
 
 ### Running the server
@@ -106,7 +130,7 @@ To register the MCP with Claude Code, use:
 ```bash
 claude mcp add climate-example -- python -m mcp_server.server
 ```
-in your Claude chat. This will create/add to the  `.claude.json` file in your home directory.
+in your Claude chat. This will create/add to the  `.claude.json` file in your home directory. Restart Claude to then load it into the session.
 
 #### VSCode and GitHub Copilot
 
